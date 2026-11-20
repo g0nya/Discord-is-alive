@@ -91,20 +91,24 @@ export async function handle(request, env, send = (url, init) => fetch(url, init
       || !/^-?\d+$/.test(env.TELEGRAM_CHAT_ID ?? "")) return new Response(null, { status: 503 });
   if (!(await env.DELIVERY_LIMIT.limit({ key: "telegram" })).success) return new Response(null, { status: 429 });
 
+  const timeout = new AbortController();
+  const timer = setTimeout(() => timeout.abort(), 5000);
   try {
     const response = await send("https://api.telegram.org/bot" + env.TELEGRAM_BOT_TOKEN + "/sendMessage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: env.TELEGRAM_CHAT_ID, text, link_preview_options: { is_disabled: true } }),
-      redirect: "error",
-      signal: AbortSignal.timeout(5000),
+      redirect: "manual",
+      signal: timeout.signal,
     });
     if (response.ok && (await response.json()).ok === true) return new Response(null, { status: 204 });
     return new Response(null, { status: 502, headers: { "X-DiscordLink-Telegram-Status": String(response.status) } });
   } catch {
     // Token and upstream response body are excluded from logs and replies.
+    return new Response(null, { status: 502, headers: { "X-DiscordLink-Telegram-Status": timeout.signal.aborted ? "timeout" : "transport" } });
+  } finally {
+    clearTimeout(timer);
   }
-  return new Response(null, { status: 502 });
 }
 
 export default { fetch: (request, env) => handle(request, env) };

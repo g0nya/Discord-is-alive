@@ -54,3 +54,43 @@ test("public build accepts a complete report without a private key", async () =>
   }), env, async () => Response.json({ ok: true }));
   assert.equal(response.status, 204);
 });
+
+test("periodic status updates storage without sending an individual Telegram message", async () => {
+  const { handle } = await import("./worker.mjs");
+  const body = { ...report, event: "failure", include_in_digest: true, snapshot: true, cause: "no_profile" };
+  const destination = {
+    ...env,
+    INSTALLATION_REPORTS: {
+      idFromName(name) { assert.equal(name, "discordlink-reports"); return name; },
+      get() {
+        return {
+          fetch(url, init) {
+            assert.equal(url, "https://reports.internal/record");
+            assert.deepEqual(JSON.parse(init.body), body);
+            return new Response(null, { status: 204 });
+          },
+        };
+      },
+    },
+  };
+  assert.equal((await handle(request(body), destination, () => assert.fail("unexpected Telegram message"))).status, 204);
+});
+
+test("digest marks stale installations and sends a CSV to the configured chat", async () => {
+  const { sendDigest, digestContent } = await import("./digest.mjs");
+  const now = Date.parse("2026-11-20T21:00:00Z");
+  const rows = [
+    { id: "1032547698abcdef", seen: now, report: JSON.stringify(report) },
+    { id: "999999aaaaabbbbb", seen: now - 46 * 60_000, report: JSON.stringify(report) },
+  ];
+  const result = digestContent(rows, now);
+  assert.match(result.caption, /Нет свежих данных \(>45 мин\): 1/);
+  assert.match(result.csv, /999999aaaaabbbbb/);
+  assert.match(result.csv, /YouTube Media/);
+  assert.equal(await sendDigest(env, rows, now, async (url, init) => {
+    assert.match(url, /\/sendDocument$/);
+    assert.equal(init.body.get("chat_id"), env.TELEGRAM_CHAT_ID);
+    assert.match(await init.body.get("document").text(), /1032547698abcdef/);
+    return Response.json({ ok: true });
+  }), true);
+});

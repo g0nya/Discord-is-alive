@@ -37,6 +37,8 @@ type reportCheck struct {
 }
 
 type telemetryReport struct {
+	Digest       bool          `json:"include_in_digest,omitempty"`
+	Snapshot     bool          `json:"snapshot,omitempty"`
 	Installation string        `json:"installation_id,omitempty"`
 	Event        string        `json:"event"`
 	Version      string        `json:"version"`
@@ -107,6 +109,7 @@ type reporter struct {
 	consentPath      string
 	lastAttempt      map[string]time.Time
 	readyDay         string
+	lastSnapshot     time.Time
 	pending          chan delivery
 	cancel           context.CancelFunc
 }
@@ -135,7 +138,7 @@ func loadReporter(exeDir, dataDir string) (*reporter, error) {
 	// Consent is scoped to the destination and enrollment key.
 	identity := sha256.Sum256([]byte(cfg.URL + "\n" + cfg.Key))
 	dir := filepath.Join(dataDir, "telemetry", fmt.Sprintf("%x", identity))
-	r := &reporter{cfg: cfg, path: filepath.Join(dir, "history.json"), consentPath: filepath.Join(dir, "consent-v2"), installationPath: filepath.Join(dir, "installation-id"), lastAttempt: make(map[string]time.Time)}
+	r := &reporter{cfg: cfg, path: filepath.Join(dir, "history.json"), consentPath: filepath.Join(dir, "consent-v3"), installationPath: filepath.Join(dir, "installation-id"), lastAttempt: make(map[string]time.Time)}
 	if data, err := os.ReadFile(r.consentPath); err == nil {
 		r.enabled = string(data) == "yes\n"
 		if r.enabled {
@@ -195,6 +198,9 @@ func (r *reporter) tick(ctx context.Context, s desktopStatus) {
 			r.cancel()
 			r.cancel = nil
 			if result.err == nil {
+				r.lastSnapshot = result.when
+			}
+			if result.err == nil && result.event != "snapshot" {
 				if result.event == eventReady {
 					r.history.ReadyDay = result.when.Format(time.DateOnly)
 				} else {
@@ -215,27 +221,33 @@ func (r *reporter) tick(ctx context.Context, s desktopStatus) {
 	if !r.enabled || ctx.Err() != nil {
 		return
 	}
-	if s.event == eventReady {
-		today := now.Format(time.DateOnly)
-		if r.readyDay == "" {
-			r.readyDay = today
-		}
-		if r.readyDay != today {
-			return
-		}
-	}
-	if !r.history.allows(s.event, now) || now.Sub(r.lastAttempt[s.event]) < 2*time.Minute {
+	if s.event != eventReady && s.event != eventFailure {
 		return
 	}
-	r.lastAttempt[s.event] = now
+	event := s.event
+	if event == eventReady && r.readyDay == "" {
+		r.readyDay = now.Format(time.DateOnly)
+	}
+	if !r.history.allows(event, now) || (event == eventReady && r.readyDay != now.Format(time.DateOnly)) {
+		if now.Sub(r.lastSnapshot) < 15*time.Minute || (s.checkedAt.IsZero() && s.cause == "") {
+			return
+		}
+		event = "snapshot"
+	}
+	if now.Sub(r.lastAttempt[event]) < 2*time.Minute {
+		return
+	}
+	r.lastAttempt[event] = now
 	requestCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	ch := make(chan delivery, 1)
 	r.pending, r.cancel = ch, cancel
 	payload := s.report()
 	payload.Installation = r.installation
+	payload.Digest = true
+	payload.Snapshot = event == "snapshot"
 	go func() {
 		err := sendTelemetry(requestCtx, r.cfg, payload)
-		ch <- delivery{s.event, now, err}
+		ch <- delivery{event, now, err}
 	}()
 }
 

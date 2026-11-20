@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"fmt"
 	"os"
@@ -78,17 +77,21 @@ type notifyIcon struct {
 }
 
 type windowsTray struct {
-	reporter                  *reporter
-	reportConfigErr           bool
-	app                       *desktopController
-	user, shell               *syscall.LazyDLL
-	hwnd, icon, taskbar       uintptr
-	console                   uintptr
-	ownConsole, consoleShown  bool
-	consoleStarted, autostart bool
-	input                     chan string
-	tooltip                   string
-	systemDir                 string
+	reporter                       *reporter
+	reportConfigErr                bool
+	app                            *desktopController
+	user, shell                    *syscall.LazyDLL
+	hwnd, icon, taskbar            uintptr
+	console                        uintptr
+	ownConsole, consoleShown       bool
+	consoleStarted, autostart      bool
+	consoleVT                      bool
+	consoleMode                    uint32
+	consoleScreen                  int
+	consoleRendered, consoleNotice string
+	input                          chan string
+	tooltip                        string
+	systemDir                      string
 }
 
 // The window and its callback are confined to the locked UI thread.
@@ -121,6 +124,7 @@ func runDesktop(ctx context.Context, dataDir, exeDir string, showConsole bool) e
 		}
 	}()
 	currentTray = t
+	defer t.leaveConsoleScreen()
 	defer func() { currentTray = nil }()
 
 	instance, _, err := kernel.NewProc("GetModuleHandleW").Call(0)
@@ -242,6 +246,7 @@ func trayWindowProc(hwnd, msg, w, l uintptr) uintptr {
 			t.consoleAction(choice)
 		default:
 		}
+		t.renderConsole()
 		return 0
 	case wmClose, wmDestroy:
 		t.user.NewProc("PostQuitMessage").Call(0)
@@ -383,7 +388,8 @@ func (t *windowsTray) toggleTelemetry() {
 		question := "Разрешить отчёты владельцу DiscordLink в Telegram?\n\n" +
 			"Отправляются случайный ID установки, версия, профиль, результаты проверок Discord и YouTube, время их ответа и тип сбоя. " +
 			"При повторных запусках отправляется только первый успешный отчёт за день. " +
-			"Отчёт о сбое отправляется не чаще раза в час.\n\nСервер: " + r.cfg.URL
+			"Отчёт о сбое отправляется не чаще раза в час. Пока программа запущена, статус обновляется для сводки примерно каждые 15 минут. " +
+			"Сервер хранит последний отчёт по ID примерно 24 часа.\n\nСервер: " + r.cfg.URL
 		if t.popup(question, 0x124) != 6 { // Yes/No, with No selected by default.
 			return
 		}
@@ -471,94 +477,6 @@ func (t *windowsTray) setStartup(enabled bool) error {
 	}
 	command := `"` + exe + `" -tray`
 	return t.reg("add", startupKey, "/v", "DiscordLink", "/t", "REG_SZ", "/d", command, "/f")
-}
-
-func (t *windowsTray) openConsole() {
-	if t.console == 0 {
-		t.popup("Откройте DiscordLink из Windows Terminal с параметром -console.", 0x40)
-		return
-	}
-	if t.ownConsole {
-		t.user.NewProc("ShowWindow").Call(t.console, 5)
-		t.user.NewProc("SetForegroundWindow").Call(t.console)
-	}
-	t.consoleShown = true
-	t.printMenu()
-	if t.consoleStarted {
-		return
-	}
-	t.consoleStarted = true
-	go func() {
-		scanner := bufio.NewScanner(os.Stdin)
-		for scanner.Scan() {
-			select {
-			case t.input <- strings.TrimSpace(scanner.Text()):
-			case <-t.app.ctx.Done():
-				return
-			}
-		}
-	}()
-}
-
-func (t *windowsTray) printMenu() {
-	onOff := func(flag bool) string {
-		if flag {
-			return "вкл."
-		}
-		return "выкл."
-	}
-	s := t.app.snapshot()
-	fmt.Printf("\n  ╔═ DiscordLink %s ═ Панель подключения ═╗\n", version)
-	fmt.Printf("  %s\n", s.label)
-	if s.profile != "" {
-		fmt.Printf("  Профиль  %s\n", s.profile)
-	}
-	fmt.Printf("  Автозапуск  %s  ·  Game Filter  %s\n\n", onOff(t.autostart), onOff(t.app.gameFilter))
-	fmt.Println("  1  Запустить                 2  Остановить")
-	fmt.Println("  3  Проверить соединение      4  Показать диагностику")
-	fmt.Println("  5  Копировать диагностику    6  Переключить автозапуск")
-	fmt.Println("  7  Переключить Game Filter   8  Свернуть в трей")
-	fmt.Printf("  9  Отчёты в Telegram (%s)\n", onOff(t.reporter != nil && t.reporter.enabled))
-	fmt.Println("  0  Выход")
-	fmt.Print("\n  Выбери действие > ")
-}
-
-func (t *windowsTray) consoleAction(choice string) {
-	switch choice {
-	case "1":
-		t.action(actionStart)
-	case "2":
-		t.action(actionStop)
-	case "3":
-		t.action(actionCheck)
-	case "4":
-		fmt.Println("\n" + t.app.snapshot().diagnostic())
-	case "5":
-		if err := t.copyReport(t.app.snapshot().diagnostic()); err != nil {
-			fmt.Println("\n  Не удалось скопировать:", err)
-		} else {
-			fmt.Println("\n  Диагностика скопирована.")
-		}
-	case "6":
-		t.action(actionStartup)
-	case "7":
-		t.action(actionGame)
-	case "8":
-		if t.ownConsole {
-			t.user.NewProc("ShowWindow").Call(t.console, 0)
-			t.consoleShown = false
-			return
-		}
-		fmt.Println("\n  Общее окно терминала остаётся открытым. Меню также доступно в трее.")
-	case "9":
-		t.action(actionTelemetry)
-	case "0":
-		t.action(actionExit)
-		return
-	}
-	if t.consoleShown {
-		t.printMenu()
-	}
 }
 
 func (t *windowsTray) createIcon() uintptr {

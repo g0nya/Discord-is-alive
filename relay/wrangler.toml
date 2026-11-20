@@ -14,3 +14,14 @@ simple = { limit = 5, period = 60 }
 name = "DELIVERY_LIMIT"
 namespace_id = "731902"
 simple = { limit = 15, period = 60 }
+
+[triggers]
+crons = ["*/30 * * * *"]
+
+[[durable_objects.bindings]]
+name = "INSTALLATION_REPORTS"
+class_name = "InstallationReports"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["InstallationReports"]

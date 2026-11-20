@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	eventReady   = "ready"
-	eventFailure = "failure"
+	publicRelayURL = "https://discordlink-telegram.g0nya.workers.dev/v1/public-report"
+	eventReady     = "ready"
+	eventFailure   = "failure"
 )
 
 // The deployment file carries only a relay URL and its admission key.
@@ -106,26 +107,26 @@ type reporter struct {
 }
 
 func loadReporter(exeDir, dataDir string) (*reporter, error) {
+	cfg := relayConfig{URL: publicRelayURL}
 	raw, err := os.ReadFile(filepath.Join(exeDir, "telemetry.json"))
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
+	if err == nil {
+		cfg = relayConfig{}
+		if err := json.Unmarshal(raw, &cfg); err != nil {
+			return nil, err
+		}
+		endpoint, err := url.Parse(cfg.URL)
+		if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" ||
+			endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
+			endpoint.Path != "/v1/report" || len(cfg.Key) < 32 || len(cfg.Key) > 128 ||
+			strings.IndexFunc(cfg.Key, func(r rune) bool {
+				return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
+			}) >= 0 {
+			return nil, fmt.Errorf("invalid Telegram relay URL or admission key")
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, err
 	}
-	var cfg relayConfig
-	if err := json.Unmarshal(raw, &cfg); err != nil {
-		return nil, err
-	}
-	endpoint, err := url.Parse(cfg.URL)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" ||
-		endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" ||
-		endpoint.Path != "/v1/report" || len(cfg.Key) < 32 || len(cfg.Key) > 128 ||
-		strings.IndexFunc(cfg.Key, func(r rune) bool {
-			return !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_')
-		}) >= 0 {
-		return nil, fmt.Errorf("invalid Telegram relay URL or admission key")
-	}
+
 	// Consent is scoped to the destination and enrollment key.
 	identity := sha256.Sum256([]byte(cfg.URL + "\n" + cfg.Key))
 	dir := filepath.Join(dataDir, "telemetry", fmt.Sprintf("%x", identity))
@@ -215,7 +216,9 @@ func sendTelemetry(ctx context.Context, cfg relayConfig, payload telemetryReport
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.Key)
+	if cfg.Key != "" {
+		req.Header.Set("Authorization", "Bearer "+cfg.Key)
+	}
 	req.Header.Set("User-Agent", "DiscordLink/"+version)
 	client := &http.Client{
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },

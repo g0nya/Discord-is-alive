@@ -42,3 +42,14 @@ test("rejects bad authentication, unexpected fields, excess bytes and rate-limit
   const limited = { ...env, DELIVERY_LIMIT: { limit: async () => ({ success: false }) } };
   assert.equal((await handle(request(report), limited, send)).status, 429);
 });
+
+test("public build accepts a complete report without a private key", async () => {
+  const body = { ...report, checks: ["API", "Gateway", "CDN", "Updates", "YouTube", "YouTube Media"]
+    .map((name) => ({ name, code: "ok", ms: 42 })) };
+  const response = await handle(new Request("https://relay.example/v1/public-report", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  }), env, async () => Response.json({ ok: true }));
+  assert.equal(response.status, 204);
+});

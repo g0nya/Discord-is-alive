@@ -75,9 +75,11 @@ function authorized(header, key) {
 }
 
 export async function handle(request, env, send = (url, init) => fetch(url, init)) {
-  if (new URL(request.url).pathname !== "/v1/report") return new Response(null, { status: 404 });
+  const path = new URL(request.url).pathname;
+  const publicReport = path === "/v1/public-report";
+  if (!publicReport && path !== "/v1/report") return new Response(null, { status: 404 });
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
-  if (!authorized(request.headers.get("Authorization"), env.RELAY_KEY)) return new Response(null, { status: 401 });
+  if (!publicReport && !authorized(request.headers.get("Authorization"), env.RELAY_KEY)) return new Response(null, { status: 401 });
   if (request.headers.get("content-type")?.split(";", 1)[0].trim().toLowerCase() !== "application/json") {
     return new Response(null, { status: 415 });
   }
@@ -85,8 +87,12 @@ export async function handle(request, env, send = (url, init) => fetch(url, init
   const source = request.headers.get("CF-Connecting-IP") ?? "unknown";
   if (!(await env.SOURCE_LIMIT.limit({ key: source })).success) return new Response(null, { status: 429 });
 
-  const text = formatReport(await readReport(request));
+  const report = await readReport(request);
+  const text = formatReport(report);
   if (!text) return new Response(null, { status: 400 });
+  if (publicReport && report.event === "ready" && (!report.profile || report.checks.length !== checks.size)) {
+    return new Response(null, { status: 400 });
+  }
   if (!/^\d+:[A-Za-z0-9_-]+$/.test(env.TELEGRAM_BOT_TOKEN ?? "")
       || !/^-?\d+$/.test(env.TELEGRAM_CHAT_ID ?? "")) return new Response(null, { status: 503 });
   if (!(await env.DELIVERY_LIMIT.limit({ key: "telegram" })).success) return new Response(null, { status: 429 });

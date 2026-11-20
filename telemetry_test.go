@@ -74,3 +74,14 @@ func TestReportConsentAndDailyLimit(t *testing.T) {
 		t.Fatalf("changed destination inherited consent: %v", err)
 	}
 }
+
+func TestBundledRelayIsOptIn(t *testing.T) {
+	r, err := loadReporter(t.TempDir(), t.TempDir())
+	if err != nil || r == nil || r.enabled || r.cfg.Key != "" || r.cfg.URL != publicRelayURL {
+		t.Fatalf("unexpected bundled configuration: %v", err)
+	}
+	r.tick(context.Background(), desktopStatus{event: eventReady})
+	if r.pending != nil {
+		t.Fatal("bundled report attempted without consent")
+	}
+}

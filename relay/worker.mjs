@@ -74,7 +74,7 @@ function authorized(header, key) {
   return diff === 0;
 }
 
-export async function handle(request, env, send = fetch) {
+export async function handle(request, env, send = (url, init) => fetch(url, init)) {
   if (new URL(request.url).pathname !== "/v1/report") return new Response(null, { status: 404 });
   if (request.method !== "POST") return new Response(null, { status: 405, headers: { Allow: "POST" } });
   if (!authorized(request.headers.get("Authorization"), env.RELAY_KEY)) return new Response(null, { status: 401 });
@@ -100,6 +100,7 @@ export async function handle(request, env, send = fetch) {
       signal: AbortSignal.timeout(5000),
     });
     if (response.ok && (await response.json()).ok === true) return new Response(null, { status: 204 });
+    return new Response(null, { status: 502, headers: { "X-DiscordLink-Telegram-Status": String(response.status) } });
   } catch {
     // Token and upstream response body are excluded from logs and replies.
   }

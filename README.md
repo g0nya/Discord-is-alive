@@ -4,7 +4,7 @@
 
 ## Запуск
 
-1. Скачайте `DiscordLink.exe` или ZIP в разделе **Assets** на [странице последнего релиза](https://github.com/g0nya/DiscordLink/releases/latest). Если используете ZIP, распакуйте его.
+1. Скачайте `DiscordLink.exe` или ZIP в разделе **Assets** на [странице последнего релиза](https://github.com/g0nya/Discord-is-alive/releases/latest). Если используете ZIP, распакуйте его.
 2. Закройте другие обходы на базе `winws.exe` и запустите `DiscordLink.exe`. Подтвердите запрос Windows на повышение прав, чтобы WinDivert мог обрабатывать сетевые пакеты.
 3. Откроется главное меню, а в области уведомлений появится значок DiscordLink. Когда проверки пройдут, полностью закройте и заново откройте Discord. Для проверки YouTube откройте видео.
 
@@ -60,3 +60,7 @@ go build -trimpath -o DiscordLink.exe .
 ```
 
 Команда `go test ./...` запускает тесты выбора профилей, диагностики, WebSocket и Game Filter. Для проверки распаковки движка задайте `DISCORDLINK_TEST_ARCHIVE` с путём к официальному ZIP. Сетевой движок распространяется его авторами через [Flowseal](https://github.com/Flowseal/zapret-discord-youtube) и [zapret](https://github.com/bol-van/zapret).
+
+## Отчёты в Telegram
+
+Пункт `9` включает отправку только с согласия пользователя. Для настройки бота и Worker см. [инструкцию](relay/README.md).

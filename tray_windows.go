@@ -39,6 +39,7 @@ const (
 	actionReport
 	actionGame
 	actionStartup
+	actionTelemetry
 	actionToggleConsole
 	actionExit
 )
@@ -77,6 +78,8 @@ type notifyIcon struct {
 }
 
 type windowsTray struct {
+	reporter                  *reporter
+	reportConfigErr           bool
 	app                       *desktopController
 	user, shell               *syscall.LazyDLL
 	hwnd, icon, taskbar       uintptr
@@ -110,6 +113,13 @@ func runDesktop(ctx context.Context, dataDir, exeDir string, showConsole bool) e
 		shell: syscall.NewLazyDLL(filepath.Join(systemDir, "shell32.dll")),
 		input: make(chan string, 1),
 	}
+	t.reporter, err = loadReporter(exeDir, dataDir)
+	t.reportConfigErr = err != nil
+	defer func() {
+		if t.reporter != nil && t.reporter.cancel != nil {
+			t.reporter.cancel()
+		}
+	}()
 	currentTray = t
 	defer func() { currentTray = nil }()
 
@@ -221,6 +231,9 @@ func trayWindowProc(hwnd, msg, w, l uintptr) uintptr {
 			t.user.NewProc("PostQuitMessage").Call(0)
 			return 0
 		}
+		if t.reporter != nil {
+			t.reporter.tick(t.app.ctx, t.app.snapshot())
+		}
 		if t.tooltip != t.tipText() {
 			t.updateIcon(nimModify)
 		}
@@ -303,6 +316,7 @@ func (t *windowsTray) menu() {
 	add(0, 0x800, "")
 	add(actionStartup, checked(t.autostart), "Автозапуск при входе")
 	add(actionGame, checked(t.app.gameFilter), "Game Filter")
+	add(actionTelemetry, checked(t.reporter != nil && t.reporter.enabled), "Отчёты в Telegram…")
 	add(actionToggleConsole, 0, "Главное меню")
 	add(actionExit, 0, "Выход")
 	var p winPoint
@@ -345,6 +359,8 @@ func (t *windowsTray) action(id uintptr) {
 			t.popup("Не удалось изменить автозапуск. "+err.Error(), 0x30)
 		}
 		t.autostart = t.startupEnabled()
+	case actionTelemetry:
+		t.toggleTelemetry()
 	case actionToggleConsole:
 		t.openConsole()
 	case actionExit:
@@ -352,9 +368,35 @@ func (t *windowsTray) action(id uintptr) {
 	}
 }
 
-func (t *windowsTray) popup(text string, flags uintptr) {
-	t.user.NewProc("MessageBoxW").Call(t.hwnd, uintptr(unsafe.Pointer(utf16ptr(text))),
+func (t *windowsTray) toggleTelemetry() {
+	r := t.reporter
+	if r == nil {
+		message := "Сервер для отчётов ещё не настроен. Рядом с DiscordLink.exe нужен telemetry.json."
+		if t.reportConfigErr {
+			message = "Проверьте формат URL и ключа в telemetry.json."
+		}
+		t.popup(message, 0x40)
+		return
+	}
+	next := !r.enabled
+	if next {
+		question := "Разрешить отчёты владельцу DiscordLink в Telegram?\n\n" +
+			"Отправляются версия, профиль, результаты проверок Discord и YouTube, время их ответа и тип сбоя. " +
+			"При повторных запусках отправляется только первый успешный отчёт за день. " +
+			"Отчёт о сбое отправляется не чаще раза в час.\n\nСервер: " + r.cfg.URL
+		if t.popup(question, 0x124) != 6 { // Yes/No, with No selected by default.
+			return
+		}
+	}
+	if err := r.setEnabled(next); err != nil {
+		t.popup("Не удалось сохранить настройку отправки отчётов.", 0x30)
+	}
+}
+
+func (t *windowsTray) popup(text string, flags uintptr) uintptr {
+	result, _, _ := t.user.NewProc("MessageBoxW").Call(t.hwnd, uintptr(unsafe.Pointer(utf16ptr(text))),
 		uintptr(unsafe.Pointer(utf16ptr("DiscordLink"))), flags)
+	return result
 }
 
 func reportLaunchError(err error) {
@@ -476,6 +518,7 @@ func (t *windowsTray) printMenu() {
 	fmt.Println("  3  Проверить соединение      4  Показать диагностику")
 	fmt.Println("  5  Копировать диагностику    6  Переключить автозапуск")
 	fmt.Println("  7  Переключить Game Filter   8  Свернуть в трей")
+	fmt.Printf("  9  Отчёты в Telegram (%s)\n", onOff(t.reporter != nil && t.reporter.enabled))
 	fmt.Println("  0  Выход")
 	fmt.Print("\n  Выбери действие > ")
 }
@@ -507,6 +550,8 @@ func (t *windowsTray) consoleAction(choice string) {
 			return
 		}
 		fmt.Println("\n  Общее окно терминала остаётся открытым. Меню также доступно в трее.")
+	case "9":
+		t.action(actionTelemetry)
 	case "0":
 		t.action(actionExit)
 		return

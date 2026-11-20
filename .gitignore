@@ -1,3 +1,7 @@
 /DiscordLink.exe
 *.test.exe
 .DS_Store
+
+/telemetry.json
+/relay/.dev.vars*
+/relay/.wrangler/

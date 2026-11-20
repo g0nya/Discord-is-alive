@@ -20,6 +20,7 @@ const (
 
 type desktopStatus struct {
 	label, profile, reason string
+	event, cause           string
 	checks                 []measurement
 	checkedAt              time.Time
 }
@@ -147,7 +148,7 @@ func (d *desktopController) start() {
 			d.setStatus(desktopStatus{label: "Остановлен"})
 		} else if err != nil {
 			fmt.Fprintln(os.Stderr, "DiscordLink:", err)
-			d.setStatus(desktopStatus{label: "Ошибка запуска", reason: "Проверьте движок, права или активный winws.exe. Подробности в консоли."})
+			d.setStatus(desktopStatus{label: "Ошибка запуска", event: eventFailure, cause: "startup", reason: "Проверьте движок, права или активный winws.exe. Подробности в консоли."})
 		}
 	}()
 }
@@ -231,7 +232,7 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 		}
 		active, current, err = chooseProfile(ctx, dir, d.dataDir, id, skip, false, gameFilter, check)
 		if err == nil {
-			last.label = activeLabel(last.checks)
+			last.label, last.event = activeLabel(last.checks), eventReady
 			last.profile = current.name
 			d.setStatus(last)
 		}
@@ -244,16 +245,16 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 	for ctx.Err() == nil {
 		if !time.Now().Before(state.nextCheck) {
 			if state.network == "" {
-				last.label, last.reason = "Ожидает сеть", "Нет активного сетевого адреса"
+				last.label, last.reason, last.event = "Ожидает сеть", "Нет активного сетевого адреса", ""
 				d.setStatus(last)
 				state.nextCheck = time.Now().Add(healthPeriod)
 			} else if active == nil {
 				if err := activate(state.network, ""); err != nil && ctx.Err() == nil {
 					fmt.Fprintln(os.Stderr, err)
 					if dir == "" {
-						last.label, last.reason = "Движок недоступен", "Проверьте загрузку Flowseal и наличие ZIP рядом с DiscordLink"
+						last.label, last.reason, last.event, last.cause = "Движок недоступен", "Проверьте загрузку Flowseal и наличие ZIP рядом с DiscordLink", eventFailure, "engine_download"
 					} else {
-						last.label, last.reason = "Discord недоступен", "Подходящий профиль не найден"
+						last.label, last.reason, last.event, last.cause = "Discord недоступен", "Подходящий профиль не найден", eventFailure, "no_profile"
 					}
 					d.setStatus(last)
 				}
@@ -262,7 +263,7 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 				_, ok, _ := check(ctx, current.name, 1)
 				if !state.recoverAfterCheck(time.Now(), ok) {
 					if ok {
-						last.label = activeLabel(last.checks)
+						last.label, last.event = activeLabel(last.checks), eventReady
 						saveProfile(state.network, profileCachePath(d.dataDir, state.network), current)
 					} else {
 						last.label = "Связь нестабильна"
@@ -282,12 +283,12 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 						if restartErr != nil {
 							fmt.Fprintln(os.Stderr, restartErr)
 						} else if _, ok, _ := check(ctx, previous.name, 1); ok {
-							last.label = activeLabel(last.checks)
+							last.label, last.event = activeLabel(last.checks), eventReady
 							d.setStatus(last)
 							state.nextCheck = time.Now().Add(healthPeriod)
 							continue
 						}
-						last.label, last.reason = "Discord недоступен", "Запасные профили не прошли проверку"
+						last.label, last.reason, last.event, last.cause = "Discord недоступен", "Запасные профили не прошли проверку", eventFailure, "no_profile"
 						d.setStatus(last)
 					}
 					state.nextCheck = time.Now().Add(healthPeriod)
@@ -304,7 +305,7 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 		case <-engineDone:
 			fmt.Fprintln(os.Stderr, active.failure())
 			active = nil
-			d.setStatus(desktopStatus{label: "Движок остановился", reason: "Будет повторная попытка"})
+			d.setStatus(desktopStatus{label: "Движок остановился", event: eventFailure, cause: "engine_exit", reason: "Будет повторная попытка"})
 			state.nextCheck = time.Now().Add(retryDelay)
 		case <-poll.C:
 			state.observeNetwork(time.Now(), networkID())

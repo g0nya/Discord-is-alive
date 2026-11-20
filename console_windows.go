@@ -106,10 +106,10 @@ func (t *windowsTray) renderConsole() {
 	if !s.checkedAt.IsZero() {
 		fmt.Fprintf(&text, "  ·  Проверено в %s", s.checkedAt.Format("15:04:05"))
 	}
-	text.WriteString("\n\n")
+	text.WriteString("\n  " + t.reporter.statusText() + "\n\n")
 	switch t.consoleScreen {
 	case settingsScreen:
-		fmt.Fprintf(&text, "  Настройки\n\n  1  Автозапуск при входе (%s)\n  2  Game Filter (%s)\n  3  Отчёты в Telegram (%s)\n  0  Назад\n",
+		fmt.Fprintf(&text, "  Настройки\n\n  1  Автозапуск при входе (%s)\n  2  Game Filter (%s)\n  3  Отчёты в Telegram (%s)\n  4  Отправить статус сейчас\n  0  Назад\n",
 			toggleLabel(t.autostart), toggleLabel(t.app.gameFilter), toggleLabel(t.reporter != nil && t.reporter.enabled))
 	case diagnosticsScreen:
 		text.WriteString(s.diagnostic())
@@ -148,6 +148,13 @@ func (t *windowsTray) consoleAction(choice string) {
 			t.action(actionGame)
 		case "3":
 			t.action(actionTelemetry)
+		case "4":
+			if t.reporter == nil || !t.reporter.enabled {
+				t.consoleNotice = "Сначала включи отчёты Telegram."
+			} else {
+				t.reporter.forceSnapshot = true
+				t.consoleNotice = "Будет отправлен последний результат проверки."
+			}
 		case "0":
 			t.consoleScreen = mainScreen
 		}
@@ -169,7 +176,7 @@ func (t *windowsTray) consoleAction(choice string) {
 		case "4":
 			t.consoleScreen = diagnosticsScreen
 		case "5":
-			if err := t.copyReport(t.app.snapshot().diagnostic()); err != nil {
+			if err := t.copyReport(t.diagnosticText()); err != nil {
 				t.consoleNotice = "Не удалось скопировать диагностику."
 			} else {
 				t.consoleNotice = "Диагностика скопирована."

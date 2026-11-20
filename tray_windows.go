@@ -350,11 +350,11 @@ func (t *windowsTray) action(id uintptr) {
 			notify(t.app.recheck)
 		}
 	case actionCopy:
-		if err := t.copyReport(t.app.snapshot().diagnostic()); err != nil {
+		if err := t.copyReport(t.diagnosticText()); err != nil {
 			t.popup("Не удалось скопировать диагностику. "+err.Error(), 0x30)
 		}
 	case actionReport:
-		t.popup(t.app.snapshot().diagnostic(), 0x40)
+		t.popup(t.diagnosticText(), 0x40)
 	case actionGame:
 		if err := t.app.toggleGameFilter(); err != nil {
 			t.popup("Не удалось сохранить Game Filter. "+err.Error(), 0x30)
@@ -418,6 +418,14 @@ func reportLaunchError(err error) {
 func utf16ptr(value string) *uint16 {
 	ptr, _ := syscall.UTF16PtrFromString(strings.ReplaceAll(value, "\x00", ""))
 	return ptr
+}
+
+func (t *windowsTray) diagnosticText() string {
+	text := t.app.snapshot().diagnostic() + t.reporter.statusText() + "\r\n"
+	if t.reporter != nil && t.reporter.enabled && t.reporter.installation != "" {
+		text += "ID установки: " + t.reporter.installation + "\r\n"
+	}
+	return text
 }
 
 func (t *windowsTray) copyReport(text string) error {

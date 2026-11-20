@@ -83,6 +83,10 @@ export class InstallationReports {
       );
       return new Response(null, { status: 204 });
     }
+    if (path === "/status" && request.method === "GET") {
+      const row = this.sql.exec("SELECT COUNT(*) AS installations, MAX(seen) AS lastSeen FROM reports WHERE seen >= ?", Date.now() - day).one();
+      return Response.json(row);
+    }
     if (path === "/digest") {
       const { scheduledTime } = await request.json();
       const now = Date.now(), slot = Math.floor(scheduledTime / halfHour);

@@ -110,6 +110,8 @@ type reporter struct {
 	lastAttempt      map[string]time.Time
 	readyDay         string
 	lastSnapshot     time.Time
+	lastError        string
+	forceSnapshot    bool
 	pending          chan delivery
 	cancel           context.CancelFunc
 }
@@ -184,6 +186,8 @@ func (r *reporter) setEnabled(enabled bool) error {
 		return err
 	}
 	r.enabled = enabled
+	r.forceSnapshot = enabled
+	r.lastError = ""
 	if !enabled && r.cancel != nil {
 		r.cancel()
 	}
@@ -199,6 +203,9 @@ func (r *reporter) tick(ctx context.Context, s desktopStatus) {
 			r.cancel = nil
 			if result.err == nil {
 				r.lastSnapshot = result.when
+				r.lastError = ""
+			} else if r.enabled {
+				r.lastError = reportErrorText(result.err)
 			}
 			if result.err == nil && result.event != "snapshot" {
 				if result.event == eventReady {
@@ -228,15 +235,22 @@ func (r *reporter) tick(ctx context.Context, s desktopStatus) {
 	if event == eventReady && r.readyDay == "" {
 		r.readyDay = now.Format(time.DateOnly)
 	}
-	if !r.history.allows(event, now) || (event == eventReady && r.readyDay != now.Format(time.DateOnly)) {
+	if r.forceSnapshot {
+		event = "snapshot"
+	} else if !r.history.allows(event, now) || (event == eventReady && r.readyDay != now.Format(time.DateOnly)) {
 		if now.Sub(r.lastSnapshot) < 15*time.Minute || (s.checkedAt.IsZero() && s.cause == "") {
 			return
 		}
 		event = "snapshot"
 	}
-	if now.Sub(r.lastAttempt[event]) < 2*time.Minute {
+	gap := 2 * time.Minute
+	if r.forceSnapshot {
+		gap = 10 * time.Second
+	}
+	if now.Sub(r.lastAttempt[event]) < gap {
 		return
 	}
+	r.forceSnapshot = false
 	r.lastAttempt[event] = now
 	requestCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 	ch := make(chan delivery, 1)
@@ -274,7 +288,47 @@ func sendTelemetry(ctx context.Context, cfg relayConfig, payload telemetryReport
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return fmt.Errorf("relay HTTP %d", resp.StatusCode)
+		return relayHTTPError(resp.StatusCode)
 	}
 	return nil
+}
+
+type relayHTTPError int
+
+func (status relayHTTPError) Error() string {
+	return fmt.Sprintf("relay HTTP %d", status)
+}
+
+func reportErrorText(err error) string {
+	var httpStatus relayHTTPError
+	var dns *net.DNSError
+	switch {
+	case errors.As(err, &httpStatus):
+		return fmt.Sprintf("ошибка HTTP %d", httpStatus)
+	case errors.As(err, &dns):
+		return "ошибка DNS"
+	case errors.Is(err, context.DeadlineExceeded):
+		return "сервер не ответил вовремя"
+	case strings.Contains(strings.ToLower(err.Error()), "tls"):
+		return "ошибка TLS"
+	default:
+		return "не удалось соединиться с сервером"
+	}
+}
+
+func (r *reporter) statusText() string {
+	switch {
+	case r == nil:
+		return "Отчёты Telegram: проверь конфигурацию"
+	case !r.enabled:
+		return "Отчёты Telegram: выключены"
+	case r.pending != nil:
+		return "Отчёты Telegram: отправляется"
+	case r.lastError != "":
+		return "Отчёты Telegram: " + r.lastError
+	case r.forceSnapshot || r.lastSnapshot.IsZero():
+		return "Отчёты Telegram: ожидается первая отправка"
+	default:
+		return "Отчёт принят сервером в " + r.lastSnapshot.Format("15:04:05")
+	}
 }

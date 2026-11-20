@@ -12,15 +12,23 @@ import (
 
 var kernel = syscall.NewLazyDLL("kernel32.dll")
 
-func requestElevation() (bool, error) {
+func systemDirectory() (string, error) {
 	var systemDir [260]uint16
 	length, _, err := kernel.NewProc("GetSystemDirectoryW").Call(
 		uintptr(unsafe.Pointer(&systemDir[0])), uintptr(len(systemDir)),
 	)
 	if length == 0 || length >= uintptr(len(systemDir)) {
-		return false, fmt.Errorf("cannot locate Windows system directory: %w", err)
+		return "", fmt.Errorf("cannot locate Windows system directory: %w", err)
 	}
-	shell := syscall.NewLazyDLL(filepath.Join(syscall.UTF16ToString(systemDir[:length]), "shell32.dll"))
+	return syscall.UTF16ToString(systemDir[:length]), nil
+}
+
+func requestElevation() (bool, error) {
+	dir, err := systemDirectory()
+	if err != nil {
+		return false, err
+	}
+	shell := syscall.NewLazyDLL(filepath.Join(dir, "shell32.dll"))
 	admin, _, _ := shell.NewProc("IsUserAnAdmin").Call()
 	if admin != 0 {
 		return false, nil

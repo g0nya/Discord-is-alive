@@ -13,26 +13,29 @@ import (
 	"time"
 )
 
+const version = "0.2.0"
+
 func main() {
 	if err := run(); err != nil {
 		if !errors.Is(err, context.Canceled) {
 			fmt.Fprintln(os.Stderr, "\nDiscordLink:", err)
 		}
 		if len(os.Args) == 1 {
-			fmt.Println("Press Enter to close.")
-			_, _ = fmt.Scanln()
+			reportLaunchError(err)
 		}
 		os.Exit(1)
 	}
 }
 
 func run() error {
-	check := flag.Bool("check", false, "measure API, Gateway, CDN and Windows updates on the current connection")
+	trayOnly := flag.Bool("tray", false, "start minimized to the Windows tray")
+	console := flag.Bool("console", false, "open the console main menu (default)")
+	check := flag.Bool("check", false, "measure Discord and YouTube on the current connection")
 	samples := flag.Int("samples", 3, "number of rounds with -check (1 to 9)")
 	tune := flag.Bool("tune", false, "test every profile and select by median connection time")
 	manual := flag.String("profile", "", "start a specific profile: split, update, overlap or disorder")
 	flag.Parse()
-	if flag.NArg() != 0 || *samples < 1 || *samples > 9 ||
+	if flag.NArg() != 0 || (*console && *trayOnly) || *samples < 1 || *samples > 9 ||
 		(*check && (*tune || *manual != "")) || (*tune && *manual != "") {
 		return fmt.Errorf("invalid options; run with -help")
 	}
@@ -52,8 +55,8 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	if *check {
-		if _, ok := measure(ctx, "Current connection", *samples); !ok {
-			return fmt.Errorf("at least one Discord check failed")
+		if _, discord, youtube := measure(ctx, "Current connection", *samples); !discord || !youtube {
+			return fmt.Errorf("at least one service check failed")
 		}
 		return nil
 	}
@@ -77,13 +80,21 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	if !*tune && selected.name == "" {
+		return runDesktop(ctx, dataDir, filepath.Dir(exe), !*trayOnly)
+	}
 	engineDir, err := prepareEngine(ctx, dataDir, filepath.Dir(exe))
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(engineDir)
 
+	gameFilter, err := readGameFilter(dataDir)
+	if err != nil {
+		return err
+	}
 	if selected.name != "" {
+		selected.gameFilter = gameFilter
 		e, err := launch(ctx, engineDir, selected)
 		if err != nil {
 			return err
@@ -93,67 +104,74 @@ func run() error {
 		return keepRunning(ctx, e)
 	}
 
-	id := networkID()
-	cachePath := filepath.Join(dataDir, "profiles", id+".txt")
+	e, _, err := chooseProfile(ctx, engineDir, dataDir, networkID(), "", *tune, gameFilter, measure)
+	if err != nil {
+		return err
+	}
+	defer e.stop()
+	return keepRunning(ctx, e)
+}
+
+type measureProfile func(context.Context, string, int) (time.Duration, bool, bool)
+
+func chooseProfile(ctx context.Context, engineDir, dataDir, id, skip string, tune, gameFilter bool, check measureProfile) (*engine, profile, error) {
+	cachePath := profileCachePath(dataDir, id)
 	var preferred string
 	if id != "" {
 		if data, err := os.ReadFile(cachePath); err == nil {
 			preferred = strings.TrimSpace(string(data))
 		}
 	}
+	rounds := 1
+	if tune {
+		rounds = 3
+	}
 	var successful []profileScore
 	for _, p := range orderedProfiles(preferred) {
+		if p.name == skip {
+			continue
+		}
+		p.gameFilter = gameFilter
 		e, err := launch(ctx, engineDir, p)
 		if err != nil {
-			return err
+			return nil, profile{}, err
 		}
-
-		rounds := 1
-		if *tune {
-			rounds = 3
-		}
-		delay, ok := measure(ctx, p.name, rounds)
+		delay, ok, youtube := check(ctx, p.name, rounds)
 		if ctx.Err() != nil {
 			e.stop()
-			return ctx.Err()
+			return nil, profile{}, ctx.Err()
 		}
 		select {
 		case <-e.done:
-			return e.failure()
+			return nil, profile{}, e.failure()
 		default:
 		}
-		if ok && !*tune {
-			defer e.stop()
+		if ok && youtube && !tune {
 			saveProfile(id, cachePath, p)
-			return keepRunning(ctx, e)
+			return e, p, nil
 		}
 		e.stop()
 		if ok {
-			successful = append(successful, profileScore{p, delay})
+			successful = append(successful, profileScore{p, delay, youtube})
 		}
 	}
-	if len(successful) == 0 {
-		return fmt.Errorf("no profile passed API, Gateway, CDN and Windows update checks on this connection")
-	}
-
 	sortScores(successful)
 	for _, candidate := range successful {
 		e, err := launch(ctx, engineDir, candidate.profile)
 		if err != nil {
-			return err
+			return nil, profile{}, err
 		}
-		_, ok := measure(ctx, candidate.profile.name, 1)
-		if ok {
-			defer e.stop()
+		_, ok, _ := check(ctx, candidate.profile.name, 1)
+		if ok && ctx.Err() == nil {
 			saveProfile(id, cachePath, candidate.profile)
-			return keepRunning(ctx, e)
+			return e, candidate.profile, nil
 		}
 		e.stop()
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, profile{}, ctx.Err()
 		}
 	}
-	return fmt.Errorf("successful profiles could not reconnect")
+	return nil, profile{}, fmt.Errorf("no profile passed Discord connection checks")
 }
 
 func launch(ctx context.Context, dir string, p profile) (*engine, error) {
@@ -188,6 +206,10 @@ func keepRunning(ctx context.Context, e *engine) error {
 	}
 }
 
+func profileCachePath(dataDir, id string) string {
+	return filepath.Join(dataDir, "profiles", id+".txt")
+}
+
 func saveProfile(id, path string, p profile) {
 	if id != "" {
 		if err := writeAtomic(path, []byte(p.name+"\n")); err != nil {
@@ -196,11 +218,12 @@ func saveProfile(id, path string, p profile) {
 	}
 }
 
-func measure(ctx context.Context, label string, rounds int) (time.Duration, bool) {
+func measure(ctx context.Context, label string, rounds int) (time.Duration, bool, bool) {
+	allYouTube := true
 	times := make([]time.Duration, 0, rounds)
 	for range rounds {
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
-		results := probe(ctx, discordTargets)
+		results := probe(ctx, connectionTargets)
 		cancel()
 		fmt.Printf("%s", label)
 		for _, result := range results {
@@ -211,9 +234,10 @@ func measure(ctx context.Context, label string, rounds int) (time.Duration, bool
 			}
 		}
 		fmt.Println()
-		elapsed, ok := score(results)
+		elapsed, ok, youtube := scoreServices(results)
+		allYouTube = allYouTube && youtube
 		if !ok {
-			return 0, false
+			return 0, false, allYouTube
 		}
 		times = append(times, elapsed)
 	}
@@ -225,5 +249,5 @@ func measure(ctx context.Context, label string, rounds int) (time.Duration, bool
 	if rounds > 1 {
 		fmt.Printf("%s median of slowest check: %s\n", label, median)
 	}
-	return median, true
+	return median, true, allYouTube
 }

@@ -23,8 +23,10 @@ type probeTarget struct {
 
 const updateManifestURL = "https://updates.discord.com/distributions/app/manifests/latest?channel=stable&platform=win&arch=x64"
 const updatesProbe = "Updates"
+const youtubeProbe = "YouTube"
+const youtubeMediaProbe = "YouTube Media"
 
-var discordTargets = []probeTarget{
+var connectionTargets = []probeTarget{
 	{"API", "https://discord.com/api/v10/gateway", func(r *http.Response) error {
 		var data struct{ URL string }
 		if r.StatusCode != 200 || json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&data) != nil ||
@@ -49,6 +51,18 @@ var discordTargets = []probeTarget{
 		return nil
 	}},
 	{updatesProbe, updateManifestURL, nil},
+	{youtubeProbe, "https://www.youtube.com/generate_204", func(r *http.Response) error {
+		if r.StatusCode != http.StatusNoContent {
+			return fmt.Errorf("unexpected YouTube response (HTTP %d)", r.StatusCode)
+		}
+		return nil
+	}},
+	{youtubeMediaProbe, "https://redirector.googlevideo.com/robots.txt", func(r *http.Response) error {
+		if r.StatusCode != http.StatusOK && r.StatusCode != http.StatusNotFound {
+			return fmt.Errorf("unexpected YouTube media response (HTTP %d)", r.StatusCode)
+		}
+		return nil
+	}},
 }
 
 type measurement struct {

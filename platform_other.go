@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 )
@@ -13,3 +14,10 @@ func requestElevation() (bool, error) {
 
 func acquireSession() (func(), error) { return func() {}, nil }
 func configureChild(*exec.Cmd)        {}
+
+func runDesktop(context.Context, string, string, bool) error {
+	return fmt.Errorf("the tray requires Windows")
+}
+
+func reportLaunchError(error) {}
+func checkOtherEngine() error { return nil }

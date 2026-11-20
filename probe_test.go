@@ -40,7 +40,7 @@ func TestWebSocketProbe(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	gateway := discordTargets[1]
+	gateway := connectionTargets[1]
 	gateway.url = server.URL
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -133,7 +133,7 @@ func TestWindowsUpdateProbe(t *testing.T) {
 				resp.Body = io.NopCloser(strings.NewReader("x"))
 				return resp, nil
 			})}
-			err := requestProbe(context.Background(), client, discordTargets[3])
+			err := requestProbe(context.Background(), client, connectionTargets[3])
 			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
 				t.Fatalf("update probe error = %v, wanted %q", err, tc.want)
 			}

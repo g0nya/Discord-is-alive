@@ -24,6 +24,7 @@ const archiveLimit = 2 << 20
 var engineFiles = []string{
 	"winws.exe", "WinDivert.dll", "WinDivert64.sys", "cygwin1.dll",
 	"tls_clienthello_4pda_to.bin", "quic_initial_www_google_com.bin", "ACTIVE_DISCORD_UDP.bin",
+	"tls_clienthello_www_google_com.bin", "ACTIVE_GAME_UDP.bin",
 }
 
 func prepareEngine(ctx context.Context, cacheDir, exeDir string) (string, error) {

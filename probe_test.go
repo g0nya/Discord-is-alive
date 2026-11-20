@@ -7,10 +7,12 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,5 +97,49 @@ func TestEngineArchive(t *testing.T) {
 		if info, err := os.Stat(filepath.Join(dir, name)); err != nil || info.Size() == 0 {
 			t.Fatalf("missing or empty engine file %s: %v", name, err)
 		}
+	}
+}
+
+type probeTransport func(*http.Request) (*http.Response, error)
+
+func (f probeTransport) RoundTrip(req *http.Request) (*http.Response, error) { return f(req) }
+
+func TestWindowsUpdateProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name, packageHost string
+		status            int
+		want              string
+	}{
+		{"available", "stable.dl2.discordapp.net", 206, ""},
+		{"blocked package CDN", "stable.dl2.discordapp.net", 403, "update package CDN"},
+		{"untrusted host", "discordapp.net.example.com", 206, "official Windows package URL"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: probeTransport(func(req *http.Request) (*http.Response, error) {
+				calls++
+				resp := &http.Response{Header: make(http.Header)}
+				if req.URL.String() == updateManifestURL {
+					resp.StatusCode = 200
+					resp.Body = io.NopCloser(strings.NewReader(
+						fmt.Sprintf(`{"full":{"url":"https://%s/distro/app/stable/win/x64/1.0.0/full.distro"}}`, tc.packageHost)))
+					return resp, nil
+				}
+				if req.URL.Hostname() != tc.packageHost || req.Header.Get("Range") != "bytes=0-0" {
+					t.Fatalf("unexpected package request: %v", req)
+				}
+				resp.StatusCode = tc.status
+				resp.Header.Set("Content-Range", "bytes 0-0/123456")
+				resp.Body = io.NopCloser(strings.NewReader("x"))
+				return resp, nil
+			})}
+			err := requestProbe(context.Background(), client, discordTargets[3])
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("update probe error = %v, wanted %q", err, tc.want)
+			}
+			if tc.name == "untrusted host" && calls != 1 {
+				t.Fatalf("sent %d requests, wanted manifest only", calls)
+			}
+		})
 	}
 }

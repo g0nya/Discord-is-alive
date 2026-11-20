@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -19,6 +20,9 @@ type probeTarget struct {
 	name, url string
 	validate  func(*http.Response) error
 }
+
+const updateManifestURL = "https://updates.discord.com/distributions/app/manifests/latest?channel=stable&platform=win&arch=x64"
+const updatesProbe = "Updates"
 
 var discordTargets = []probeTarget{
 	{"API", "https://discord.com/api/v10/gateway", func(r *http.Response) error {
@@ -44,6 +48,7 @@ var discordTargets = []probeTarget{
 		}
 		return nil
 	}},
+	{updatesProbe, updateManifestURL, nil},
 }
 
 type measurement struct {
@@ -101,5 +106,55 @@ func requestProbe(ctx context.Context, client *http.Client, target probeTarget) 
 		return err
 	}
 	defer resp.Body.Close()
+	if target.name == updatesProbe {
+		packageURL, err := updatePackageURL(resp)
+		if err != nil {
+			return err
+		}
+		return checkUpdatePackage(ctx, client, packageURL)
+	}
 	return target.validate(resp)
+}
+
+func updatePackageURL(resp *http.Response) (*url.URL, error) {
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("update manifest returned HTTP %d", resp.StatusCode)
+	}
+	var manifest struct {
+		Full struct {
+			URL string
+		}
+	}
+	decoder := json.NewDecoder(io.LimitReader(resp.Body, 256<<10))
+	if err := decoder.Decode(&manifest); err != nil {
+		return nil, fmt.Errorf("invalid update manifest: %w", err)
+	}
+	packageURL, err := url.Parse(manifest.Full.URL)
+	if err != nil || packageURL.Scheme != "https" || packageURL.User != nil ||
+		packageURL.Port() != "" || !strings.HasSuffix(strings.ToLower(packageURL.Hostname()), ".discordapp.net") ||
+		!strings.HasPrefix(packageURL.Path, "/distro/app/stable/win/x64/") {
+		return nil, fmt.Errorf("update manifest did not contain an official Windows package URL")
+	}
+	return packageURL, nil
+}
+
+func checkUpdatePackage(ctx context.Context, client *http.Client, packageURL *url.URL) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, packageURL.String(), nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Range", "bytes=0-0")
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("update package CDN: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusPartialContent || !strings.HasPrefix(resp.Header.Get("Content-Range"), "bytes 0-0/") {
+		return fmt.Errorf("update package CDN did not honor byte range (HTTP %d)", resp.StatusCode)
+	}
+	var firstByte [1]byte
+	if _, err := io.ReadFull(resp.Body, firstByte[:]); err != nil {
+		return fmt.Errorf("update package CDN returned no data: %w", err)
+	}
+	return nil
 }

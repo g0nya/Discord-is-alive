@@ -27,10 +27,10 @@ func main() {
 }
 
 func run() error {
-	check := flag.Bool("check", false, "measure API, Gateway and CDN on the current connection")
+	check := flag.Bool("check", false, "measure API, Gateway, CDN and Windows updates on the current connection")
 	samples := flag.Int("samples", 3, "number of rounds with -check (1 to 9)")
 	tune := flag.Bool("tune", false, "test every profile and select by median connection time")
-	manual := flag.String("profile", "", "start a specific profile: split, overlap or disorder")
+	manual := flag.String("profile", "", "start a specific profile: split, update, overlap or disorder")
 	flag.Parse()
 	if flag.NArg() != 0 || *samples < 1 || *samples > 9 ||
 		(*check && (*tune || *manual != "")) || (*tune && *manual != "") {
@@ -133,7 +133,7 @@ func run() error {
 		}
 	}
 	if len(successful) == 0 {
-		return fmt.Errorf("no profile passed API, Gateway and CDN checks on this connection")
+		return fmt.Errorf("no profile passed API, Gateway, CDN and Windows update checks on this connection")
 	}
 
 	sortScores(successful)
@@ -179,7 +179,7 @@ func launch(ctx context.Context, dir string, p profile) (*engine, error) {
 }
 
 func keepRunning(ctx context.Context, e *engine) error {
-	fmt.Println("\nEngine running. Open Discord and check a voice channel. Ctrl+C to stop.")
+	fmt.Println("\nEngine running. Fully quit and reopen Discord, then check a voice channel. Ctrl+C to stop.")
 	select {
 	case <-ctx.Done():
 		return nil
@@ -199,7 +199,7 @@ func saveProfile(id, path string, p profile) {
 func measure(ctx context.Context, label string, rounds int) (time.Duration, bool) {
 	times := make([]time.Duration, 0, rounds)
 	for range rounds {
-		ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		results := probe(ctx, discordTargets)
 		cancel()
 		fmt.Printf("%s", label)

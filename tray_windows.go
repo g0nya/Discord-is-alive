@@ -390,6 +390,9 @@ func (t *windowsTray) toggleTelemetry() {
 			"При повторных запусках отправляется только первый успешный отчёт за день. " +
 			"Отчёт о сбое отправляется не чаще раза в час. Пока программа запущена, статус обновляется для сводки примерно каждые 15 минут. " +
 			"Сервер хранит последний отчёт по ID примерно 24 часа.\n\nСервер: " + r.cfg.URL
+		if backup := backupRelayURL(r.cfg.URL); backup != "" {
+			question += "\nЗапасной адрес того же сервера: " + backup
+		}
 		if t.popup(question, 0x124) != 6 { // Yes/No, with No selected by default.
 			return
 		}

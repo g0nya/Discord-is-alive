@@ -5,23 +5,28 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
 const (
-	publicRelayURL = "https://discordlink-telegram.g0nya.workers.dev/v1/public-report"
-	eventReady     = "ready"
-	eventFailure   = "failure"
+	primaryRelayHost = "discordlink-telegram.g0nya.workers.dev"
+	backupRelayHost  = "discordlink-reports-g0nya.pages.dev"
+	publicRelayURL   = "https://" + primaryRelayHost + "/v1/public-report"
+	eventReady       = "ready"
+	eventFailure     = "failure"
 )
 
 // The deployment file carries only a relay URL and its admission key.
@@ -252,7 +257,7 @@ func (r *reporter) tick(ctx context.Context, s desktopStatus) {
 	}
 	r.forceSnapshot = false
 	r.lastAttempt[event] = now
-	requestCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+	requestCtx, cancel := context.WithTimeout(ctx, 14*time.Second)
 	ch := make(chan delivery, 1)
 	r.pending, r.cancel = ch, cancel
 	payload := s.report()
@@ -270,27 +275,75 @@ func sendTelemetry(ctx context.Context, cfg relayConfig, payload telemetryReport
 	if err != nil {
 		return err
 	}
+	backup := backupRelayURL(cfg.URL)
+	if backup == "" {
+		err, _ := sendRelay(ctx, cfg, data)
+		return err
+	}
+
+	mainErr, beforeConnection := sendRelay(ctx, cfg, data)
+	// Retry only before HTTP can have reached the relay. Individual
+	// Telegram alerts must not be duplicated after a lost response.
+	if mainErr == nil || !beforeConnection || ctx.Err() != nil {
+		return mainErr
+	}
+	cfg.URL = backup
+	backupErr, _ := sendRelay(ctx, cfg, data)
+	if backupErr == nil {
+		return nil
+	}
+	return relayFallbackError{mainErr, backupErr}
+}
+
+func backupRelayURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host != primaryRelayHost ||
+		u.User != nil || u.RawQuery != "" || u.Fragment != "" ||
+		(u.Path != "/v1/report" && u.Path != "/v1/public-report") {
+		return ""
+	}
+	return "https://" + backupRelayHost + u.Path
+}
+
+func sendRelay(ctx context.Context, cfg relayConfig, data []byte) (err error, beforeConnection bool) {
+	var connected atomic.Bool
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GotConn: func(httptrace.GotConnInfo) { connected.Store(true) },
+	})
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.URL, bytes.NewReader(data))
 	if err != nil {
-		return err
+		return err, false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	if cfg.Key != "" {
 		req.Header.Set("Authorization", "Bearer "+cfg.Key)
 	}
 	req.Header.Set("User-Agent", "DiscordLink/"+version)
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 3 * time.Second}).DialContext
+	transport.TLSHandshakeTimeout = 4 * time.Second
+	defer transport.CloseIdleConnections()
 	client := &http.Client{
+		Transport:     transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return err, !connected.Load()
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNoContent {
-		return relayHTTPError(resp.StatusCode)
+		return relayHTTPError(resp.StatusCode), false
 	}
-	return nil
+	return nil, false
+}
+
+type relayFallbackError struct {
+	primary, backup error
+}
+
+func (e relayFallbackError) Error() string {
+	return "workers.dev: " + e.primary.Error() + " | pages.dev: " + e.backup.Error()
 }
 
 type relayHTTPError int
@@ -300,6 +353,13 @@ func (status relayHTTPError) Error() string {
 }
 
 func reportErrorText(err error) string {
+	var fallback relayFallbackError
+	if errors.As(err, &fallback) {
+		return "workers.dev: " + reportErrorText(fallback.primary) + " · pages.dev: " + reportErrorText(fallback.backup)
+	}
+	var invalid x509.CertificateInvalidError
+	var untrusted x509.UnknownAuthorityError
+	var hostname x509.HostnameError
 	var httpStatus relayHTTPError
 	var dns *net.DNSError
 	switch {
@@ -309,8 +369,14 @@ func reportErrorText(err error) string {
 		return "ошибка DNS"
 	case errors.Is(err, context.DeadlineExceeded):
 		return "сервер не ответил вовремя"
+	case errors.As(err, &invalid) && invalid.Reason == x509.Expired:
+		return "сертификат вне срока действия (проверь дату и время Windows)"
+	case errors.As(err, &untrusted):
+		return "Windows не доверяет сертификату"
+	case errors.As(err, &hostname):
+		return "сертификат выдан для другого адреса"
 	case strings.Contains(strings.ToLower(err.Error()), "tls"):
-		return "ошибка TLS"
+		return "сбой TLS-рукопожатия"
 	default:
 		return "не удалось соединиться с сервером"
 	}

@@ -87,3 +87,33 @@ func TestBundledRelayIsOptIn(t *testing.T) {
 		t.Fatal("bundled report attempted without consent")
 	}
 }
+
+func TestBackupRelayIsRestrictedToOfficialHost(t *testing.T) {
+	for _, path := range []string{"/v1/report", "/v1/public-report"} {
+		got := backupRelayURL("https://" + primaryRelayHost + path)
+		if got != "https://"+backupRelayHost+path {
+			t.Fatalf("backup for %s = %q", path, got)
+		}
+	}
+	for _, raw := range []string{
+		"https://elsewhere.example/v1/report",
+		"https://" + primaryRelayHost + ".elsewhere.example/v1/report",
+		"https://" + primaryRelayHost + "/v1/report?key=secret",
+		"http://" + primaryRelayHost + "/v1/report",
+	} {
+		if got := backupRelayURL(raw); got != "" {
+			t.Fatalf("unexpected backup for %s", raw)
+		}
+	}
+}
+
+func TestRelayConnectionFailureIsSafeToRetry(t *testing.T) {
+	requestCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ctx, stop := context.WithCancel(requestCtx)
+	stop()
+	err, beforeConnection := sendRelay(ctx, relayConfig{URL: "https://example.invalid/v1/report"}, []byte("{}"))
+	if err == nil || !beforeConnection {
+		t.Fatalf("canceled dial: %v, before connection %t", err, beforeConnection)
+	}
+}

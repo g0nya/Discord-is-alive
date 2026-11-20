@@ -57,7 +57,7 @@ func (p profile) args() []string {
 			"--dpi-desync-fooling=ts,md5sig", "--dpi-desync-repeats=4",
 			"--dpi-desync-cutoff=d6", "--new")
 	}
-	args = append(args, "--filter-tcp=443", "--hostlist-domains="+discordHosts)
+	args = append(args, "--filter-tcp=443", "--hostlist-domains="+discordHosts+",^"+primaryRelayHost+",^"+backupRelayHost)
 	args = append(args, p.tls...)
 	args = append(args, "--dpi-desync-cutoff=n8")
 	args = append(args, "--new", "--filter-tcp="+mediaTLSPorts, "--hostlist-domains=discord.media")

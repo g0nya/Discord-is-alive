@@ -11,7 +11,7 @@ const env = {
   SOURCE_LIMIT: limiter,
   DELIVERY_LIMIT: limiter,
 };
-const report = { event: "ready", version: "0.3.0", profile: "split", checks: [
+const report = { event: "ready", version: "0.3.2", installation_id: "1032547698abcdef", profile: "split", checks: [
   { name: "API", code: "ok", ms: 42 }, { name: "YouTube", code: "timeout" },
 ] };
 function request(body, auth = key) {
@@ -27,6 +27,7 @@ test("sends only approved fields to the configured chat", async () => {
     assert.equal(url, "https://api.telegram.org/bot999:fake_test_token/sendMessage");
     const output = JSON.parse(init.body);
     assert.equal(output.chat_id, "234");
+    assert.match(output.text, /Установка — 1032547698abcdef/);
     assert.match(output.text, /API — доступен, 42 мс/);
     assert.match(output.text, /YouTube — тайм-аут/);
     return Response.json({ ok: true });

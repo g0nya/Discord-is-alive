@@ -54,8 +54,9 @@ func TestReportConsentAndDailyLimit(t *testing.T) {
 	if err := r.setEnabled(true); err != nil {
 		t.Fatal(err)
 	}
+	id := r.installation
 	r, err = loadReporter(exeDir, dataDir)
-	if err != nil || r == nil || !r.enabled {
+	if err != nil || r == nil || !r.enabled || len(id) != 16 || r.installation != id {
 		t.Fatalf("explicit consent was not saved: %v", err)
 	}
 	now := time.Now()

@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,11 +37,12 @@ type reportCheck struct {
 }
 
 type telemetryReport struct {
-	Event   string        `json:"event"`
-	Version string        `json:"version"`
-	Profile string        `json:"profile,omitempty"`
-	Cause   string        `json:"cause,omitempty"`
-	Checks  []reportCheck `json:"checks"`
+	Installation string        `json:"installation_id,omitempty"`
+	Event        string        `json:"event"`
+	Version      string        `json:"version"`
+	Profile      string        `json:"profile,omitempty"`
+	Cause        string        `json:"cause,omitempty"`
+	Checks       []reportCheck `json:"checks"`
 }
 
 func (s desktopStatus) report() telemetryReport {
@@ -95,15 +98,17 @@ type delivery struct {
 }
 
 type reporter struct {
-	cfg         relayConfig
-	path        string
-	history     deliveryHistory
-	enabled     bool
-	consentPath string
-	lastAttempt map[string]time.Time
-	readyDay    string
-	pending     chan delivery
-	cancel      context.CancelFunc
+	installation     string
+	installationPath string
+	cfg              relayConfig
+	path             string
+	history          deliveryHistory
+	enabled          bool
+	consentPath      string
+	lastAttempt      map[string]time.Time
+	readyDay         string
+	pending          chan delivery
+	cancel           context.CancelFunc
 }
 
 func loadReporter(exeDir, dataDir string) (*reporter, error) {
@@ -130,9 +135,15 @@ func loadReporter(exeDir, dataDir string) (*reporter, error) {
 	// Consent is scoped to the destination and enrollment key.
 	identity := sha256.Sum256([]byte(cfg.URL + "\n" + cfg.Key))
 	dir := filepath.Join(dataDir, "telemetry", fmt.Sprintf("%x", identity))
-	r := &reporter{cfg: cfg, path: filepath.Join(dir, "history.json"), consentPath: filepath.Join(dir, "consent"), lastAttempt: make(map[string]time.Time)}
+	r := &reporter{cfg: cfg, path: filepath.Join(dir, "history.json"), consentPath: filepath.Join(dir, "consent-v2"), installationPath: filepath.Join(dir, "installation-id"), lastAttempt: make(map[string]time.Time)}
 	if data, err := os.ReadFile(r.consentPath); err == nil {
 		r.enabled = string(data) == "yes\n"
+		if r.enabled {
+			r.installation, err = installationID(r.installationPath)
+			if err != nil {
+				return nil, err
+			}
+		}
 	}
 	if data, err := os.ReadFile(r.path); err == nil {
 		_ = json.Unmarshal(data, &r.history)
@@ -140,9 +151,30 @@ func loadReporter(exeDir, dataDir string) (*reporter, error) {
 	return r, nil
 }
 
+func installationID(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		id := strings.TrimSpace(string(data))
+		if decoded, decodeErr := hex.DecodeString(id); decodeErr == nil && len(decoded) == 8 {
+			return strings.ToLower(id), nil
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	var random [8]byte
+	rand.Read(random[:])
+	id := hex.EncodeToString(random[:])
+	return id, writeAtomic(path, []byte(id+"\n"))
+}
+
 func (r *reporter) setEnabled(enabled bool) error {
 	value := []byte("no\n")
 	if enabled {
+		id, err := installationID(r.installationPath)
+		if err != nil {
+			return err
+		}
+		r.installation = id
 		value = []byte("yes\n")
 	}
 	if err := writeAtomic(r.consentPath, value); err != nil {
@@ -200,6 +232,7 @@ func (r *reporter) tick(ctx context.Context, s desktopStatus) {
 	ch := make(chan delivery, 1)
 	r.pending, r.cancel = ch, cancel
 	payload := s.report()
+	payload.Installation = r.installation
 	go func() {
 		err := sendTelemetry(requestCtx, r.cfg, payload)
 		ch <- delivery{s.event, now, err}

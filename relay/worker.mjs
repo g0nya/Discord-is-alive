@@ -17,17 +17,19 @@ function matchesKeys(obj, required, optional = []) {
 }
 
 function formatReport(report) {
-  if (!matchesKeys(report, ["event", "version", "checks"], ["profile", "cause"])
+  if (!matchesKeys(report, ["event", "version", "checks"], ["profile", "cause", "installation_id"])
       || !["ready", "failure"].includes(report.event)
       || typeof report.version !== "string" || !/^\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(report.version)
       || (Object.hasOwn(report, "profile") && !profiles.has(report.profile))
       || (Object.hasOwn(report, "cause") && (report.event !== "failure" || !causes.has(report.cause)))
+      || (Object.hasOwn(report, "installation_id") && (typeof report.installation_id !== "string" || !/^[a-f0-9]{16}$/.test(report.installation_id)))
       || !Array.isArray(report.checks) || report.checks.length > checks.size) return null;
 
   const lines = [
     report.event === "ready" ? "DiscordLink · работает" : "DiscordLink · сбой",
     "Версия " + report.version + (report.profile ? " · профиль " + report.profile : ""),
   ];
+  if (report.installation_id) lines.push("Установка — " + report.installation_id);
   if (report.cause) lines.push("Причина — " + causes.get(report.cause));
   const seen = new Set();
   for (const check of report.checks) {

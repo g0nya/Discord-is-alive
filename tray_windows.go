@@ -381,7 +381,7 @@ func (t *windowsTray) toggleTelemetry() {
 	next := !r.enabled
 	if next {
 		question := "Разрешить отчёты владельцу DiscordLink в Telegram?\n\n" +
-			"Отправляются версия, профиль, результаты проверок Discord и YouTube, время их ответа и тип сбоя. " +
+			"Отправляются случайный ID установки, версия, профиль, результаты проверок Discord и YouTube, время их ответа и тип сбоя. " +
 			"При повторных запусках отправляется только первый успешный отчёт за день. " +
 			"Отчёт о сбое отправляется не чаще раза в час.\n\nСервер: " + r.cfg.URL
 		if t.popup(question, 0x124) != 6 { // Yes/No, with No selected by default.

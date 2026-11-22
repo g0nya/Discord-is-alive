@@ -22,7 +22,26 @@ type desktopStatus struct {
 	label, profile, reason string
 	event, cause           string
 	checks                 []measurement
-	checkedAt              time.Time
+	checkedAt, connectedAt time.Time
+}
+
+const connectedBannerDuration = 3 * time.Second
+
+type connectionBanner struct {
+	seen, until time.Time
+}
+
+func (b *connectionBanner) active(now time.Time, s desktopStatus, visible bool) bool {
+	if !s.connectedAt.IsZero() && !s.connectedAt.Equal(b.seen) {
+		b.seen = s.connectedAt
+		if visible {
+			b.until = now.Add(connectedBannerDuration)
+		}
+	}
+	if !visible || s.event != eventReady {
+		b.until = time.Time{}
+	}
+	return now.Before(b.until)
 }
 
 func (s desktopStatus) diagnostic() string {
@@ -237,6 +256,7 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 		if err == nil {
 			last.label, last.event = activeLabel(last.checks), eventReady
 			last.profile = current.name
+			last.connectedAt = time.Now()
 			d.setStatus(last)
 		}
 		return err
@@ -287,6 +307,7 @@ func (d *desktopController) runSession(ctx context.Context, recheck, resume <-ch
 							fmt.Fprintln(os.Stderr, restartErr)
 						} else if _, ok, _ := check(ctx, previous.name, 1); ok {
 							last.label, last.event = activeLabel(last.checks), eventReady
+							last.connectedAt = time.Now()
 							d.setStatus(last)
 							state.nextCheck = time.Now().Add(healthPeriod)
 							continue

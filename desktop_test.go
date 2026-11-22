@@ -104,3 +104,30 @@ func TestDiagnosticsDistinguishUpdatePackage(t *testing.T) {
 		t.Fatalf("unexpected diagnostics: %s", result)
 	}
 }
+
+func TestConnectionBannerShowsOncePerConnection(t *testing.T) {
+	now := time.Unix(100, 0)
+	status := desktopStatus{event: eventReady, connectedAt: now}
+	var banner connectionBanner
+	if !banner.active(now, status, true) || !banner.active(now.Add(2999*time.Millisecond), status, true) {
+		t.Fatal("fresh connection should show the banner for three seconds")
+	}
+	if banner.active(now.Add(3*time.Second), status, true) {
+		t.Fatal("banner should expire at three seconds")
+	}
+	if banner.active(now.Add(time.Minute), desktopStatus{event: eventReady}, true) {
+		t.Fatal("periodic checks should not replay the banner")
+	}
+
+	now = now.Add(2 * time.Minute)
+	status.connectedAt = now
+	if !banner.active(now, status, true) || banner.active(now.Add(time.Millisecond), desktopStatus{event: eventFailure}, true) {
+		t.Fatal("reconnection should show a new banner and failure should dismiss it")
+	}
+
+	now = now.Add(time.Minute)
+	status.connectedAt = now
+	if banner.active(now, status, false) || banner.active(now.Add(time.Second), status, true) {
+		t.Fatal("a connection while minimized should not interrupt the menu")
+	}
+}

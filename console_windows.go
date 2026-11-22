@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
+	"unicode/utf8"
+	"unsafe"
 )
 
 const (
@@ -50,6 +53,8 @@ func (t *windowsTray) leaveConsoleScreen() {
 	}
 	t.consoleVT = false
 	t.consoleShown = false
+	t.showingConnected = false
+	t.connectedBanner.until = time.Time{}
 }
 
 func (t *windowsTray) readConsole(singleKey bool) {
@@ -93,11 +98,74 @@ func toggleLabel(enabled bool) string {
 	return "выкл."
 }
 
+const connectedArt = `████   ██    ███   █  █   ███  █ ██   █  █  ████  █  █   ██
+█  █  █  █   █ █   █ █    █ █  ██  █  █  █  █     █  █  █  █
+█  █  █  █   █ █   ██     █ █  ██  █   ███  ███   ████  █  █
+█  █  █  █  █████  █ █    █ █  █   █     █  █     █  █  █  █
+█  █   ██   █   █  █  █  █  █  █ ██      █  ████  █  █   ██`
+
+func consoleColumns() int {
+	var info struct {
+		size, cursor [2]int16
+		attributes   uint16
+		window       [4]int16
+		maxSize      [2]int16
+	}
+	ok, _, _ := kernel.NewProc("GetConsoleScreenBufferInfo").Call(os.Stdout.Fd(), uintptr(unsafe.Pointer(&info)))
+	if ok == 0 {
+		return 0
+	}
+	return int(info.window[2]-info.window[0]) + 1
+}
+
+func (t *windowsTray) showConnection(s desktopStatus) {
+	columns := consoleColumns()
+	center := func(text string) string {
+		return strings.Repeat(" ", max(0, (columns-utf8.RuneCountInString(text))/2)) + text
+	}
+	var text strings.Builder
+	if t.consoleVT {
+		text.WriteString("\x1b[2J\x1b[H")
+	}
+	fmt.Fprintf(&text, "\n\n%s\n\n", center("DiscordLink"))
+	if t.consoleVT {
+		text.WriteString("\x1b[1;92m")
+	}
+	firstLine, _, _ := strings.Cut(connectedArt, "\n")
+	artWidth := utf8.RuneCountInString(firstLine) + 1
+	if columns > artWidth+2 {
+		indent := strings.Repeat(" ", (columns-artWidth)/2)
+		for line := range strings.SplitSeq(connectedArt, "\n") {
+			text.WriteString(indent + line + "\n")
+		}
+	} else {
+		text.WriteString(center("ПОДКЛЮЧЕНО") + "\n")
+	}
+	if t.consoleVT {
+		text.WriteString("\x1b[0m")
+	}
+	fmt.Fprintf(&text, "\n%s\n", center(s.label))
+	fmt.Print(text.String())
+}
+
 func (t *windowsTray) renderConsole() {
+	s := t.app.snapshot()
+	if t.connectedBanner.active(time.Now(), s, t.consoleShown) {
+		if !t.showingConnected {
+			t.showingConnected = true
+			t.showConnection(s)
+		}
+		return
+	}
 	if !t.consoleShown {
 		return
 	}
-	s := t.app.snapshot()
+	if t.showingConnected {
+		t.showingConnected = false
+		t.consoleScreen = mainScreen
+		t.consoleNotice = ""
+		t.consoleRendered = ""
+	}
 	var text strings.Builder
 	fmt.Fprintf(&text, "  DiscordLink %s\n  %s", version, s.label)
 	if s.profile != "" {
@@ -134,7 +202,7 @@ func (t *windowsTray) renderConsole() {
 }
 
 func (t *windowsTray) consoleAction(choice string) {
-	if !t.consoleShown {
+	if !t.consoleShown || t.showingConnected {
 		return
 	}
 	t.consoleNotice = ""

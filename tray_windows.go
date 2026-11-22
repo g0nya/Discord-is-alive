@@ -89,6 +89,8 @@ type windowsTray struct {
 	consoleMode                    uint32
 	consoleScreen                  int
 	consoleRendered, consoleNotice string
+	connectedBanner                connectionBanner
+	showingConnected               bool
 	input                          chan string
 	tooltip                        string
 	systemDir                      string
@@ -241,12 +243,13 @@ func trayWindowProc(hwnd, msg, w, l uintptr) uintptr {
 		if t.tooltip != t.tipText() {
 			t.updateIcon(nimModify)
 		}
+		t.renderConsole()
 		select {
 		case choice := <-t.input:
 			t.consoleAction(choice)
+			t.renderConsole()
 		default:
 		}
-		t.renderConsole()
 		return 0
 	case wmClose, wmDestroy:
 		t.user.NewProc("PostQuitMessage").Call(0)

@@ -13,7 +13,7 @@ import (
 	"time"
 )
 
-const version = "0.4.2"
+const version = "0.4.3"
 
 func main() {
 	if err := run(); err != nil {
@@ -114,7 +114,7 @@ func run() error {
 
 type measureProfile func(context.Context, string, int) (time.Duration, bool, bool)
 
-func chooseProfile(ctx context.Context, engineDir, dataDir, id, skip string, tune, gameFilter bool, check measureProfile) (*engine, profile, error) {
+func chooseProfile(ctx context.Context, engineDir, dataDir, id, skip string, tune bool, gameFilter gameFilterMode, check measureProfile) (*engine, profile, error) {
 	cachePath := profileCachePath(dataDir, id)
 	var preferred string
 	if id != "" {

@@ -320,7 +320,7 @@ func (t *windowsTray) menu() {
 	add(actionCopy, 0, "Скопировать диагностику")
 	add(0, 0x800, "")
 	add(actionStartup, checked(t.autostart), "Автозапуск при входе")
-	add(actionGame, checked(t.app.gameFilter), "Game Filter")
+	add(actionGame, 0, "Game Filter: "+t.app.gameFilter.label())
 	add(actionTelemetry, checked(t.reporter != nil && t.reporter.enabled), "Отчёты в Telegram…")
 	add(actionToggleConsole, 0, "Главное меню")
 	add(actionExit, 0, "Выход")
@@ -356,7 +356,7 @@ func (t *windowsTray) action(id uintptr) {
 	case actionReport:
 		t.popup(t.diagnosticText(), 0x40)
 	case actionGame:
-		if err := t.app.toggleGameFilter(); err != nil {
+		if err := t.app.cycleGameFilter(); err != nil {
 			t.popup("Не удалось сохранить Game Filter. "+err.Error(), 0x30)
 		}
 	case actionStartup:
@@ -424,7 +424,7 @@ func utf16ptr(value string) *uint16 {
 }
 
 func (t *windowsTray) diagnosticText() string {
-	text := t.app.snapshot().diagnostic() + t.reporter.statusText() + "\r\n"
+	text := t.app.snapshot().diagnostic() + "Game Filter: " + t.app.gameFilter.label() + "\r\n" + t.reporter.statusText() + "\r\n"
 	if t.reporter != nil && t.reporter.enabled && t.reporter.installation != "" {
 		text += "ID установки: " + t.reporter.installation + "\r\n"
 	}

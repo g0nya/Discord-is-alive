@@ -80,7 +80,7 @@ func describeCheck(m measurement) string {
 }
 
 type desktopController struct {
-	gameFilter     bool
+	gameFilter     gameFilterMode
 	restartPending bool
 	// The tray thread alone owns the lifecycle fields. The worker owns the
 	// engine and publishes immutable status snapshots under the mutex.
@@ -161,9 +161,12 @@ func (d *desktopController) stop() {
 	}
 }
 
-func (d *desktopController) toggleGameFilter() error {
+func (d *desktopController) cycleGameFilter() error {
 	d.refresh()
-	next := !d.gameFilter
+	next := d.gameFilter + 1
+	if next > gameFilterSiege {
+		next = gameFilterOff
+	}
 	if err := writeGameFilter(d.dataDir, next); err != nil {
 		return err
 	}
@@ -190,7 +193,7 @@ func notify(ch chan<- struct{}) {
 	}
 }
 
-func (d *desktopController) runSession(ctx context.Context, recheck, resume <-chan struct{}, gameFilter bool) error {
+func (d *desktopController) runSession(ctx context.Context, recheck, resume <-chan struct{}, gameFilter gameFilterMode) error {
 	if err := checkOtherEngine(); err != nil {
 		return err
 	}

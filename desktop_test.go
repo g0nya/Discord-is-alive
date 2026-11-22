@@ -56,26 +56,45 @@ func TestYouTubeFailurePreservesDiscord(t *testing.T) {
 
 func TestGameFilterSettingsAndArguments(t *testing.T) {
 	dir := t.TempDir()
-	if enabled, err := readGameFilter(dir); enabled || err != nil {
-		t.Fatalf("Game Filter default = %v, %v", enabled, err)
+	if mode, err := readGameFilter(dir); mode != gameFilterOff || err != nil {
+		t.Fatalf("Game Filter default = %v, %v", mode, err)
 	}
-	for _, enabled := range []bool{true, false} {
-		if err := writeGameFilter(dir, enabled); err != nil {
-			t.Fatal(err)
-		}
-		p := profiles[0]
-		var err error
-		p.gameFilter, err = readGameFilter(dir)
-		if err != nil || p.gameFilter != enabled {
-			t.Fatalf("Game Filter = %v, %v; wanted %v", p.gameFilter, err, enabled)
-		}
-		args := p.args()
-		if slices.Contains(args, "--filter-udp="+gamePorts) != enabled {
-			t.Fatalf("unexpected Game Filter arguments: %v", args)
-		}
-		if !slices.Contains(args, "--hostlist-domains="+youtubeHosts) {
-			t.Fatal("missing YouTube TLS rule")
-		}
+	tests := []struct {
+		mode             gameFilterMode
+		tcp, udp         string
+		gameTCP, gameUDP string
+	}{
+		{gameFilterOff, "443," + mediaTLSPorts, "443," + voicePorts, "", ""},
+		{gameFilterAll, "443," + gamePorts, "443," + gamePorts, gamePorts, gamePorts},
+		{gameFilterSiege, "443," + mediaTLSPorts, "443," + voicePorts + "," + siegeUDPPorts, "", siegeUDPPorts},
+	}
+	for _, test := range tests {
+		t.Run(test.mode.label(), func(t *testing.T) {
+			if err := writeGameFilter(dir, test.mode); err != nil {
+				t.Fatal(err)
+			}
+			mode, err := readGameFilter(dir)
+			if err != nil || mode != test.mode {
+				t.Fatalf("Game Filter = %v, %v; wanted %v", mode, err, test.mode)
+			}
+			for _, p := range profiles {
+				p.gameFilter = mode
+				args := p.args()
+				if args[0] != "--wf-tcp="+test.tcp || args[1] != "--wf-udp="+test.udp {
+					t.Fatalf("%s: unexpected capture ranges %v", p.name, args[:2])
+				}
+				for _, ports := range []string{gamePorts, siegeUDPPorts} {
+					if slices.Contains(args, "--filter-tcp="+ports) != (test.gameTCP == ports) ||
+						slices.Contains(args, "--filter-udp="+ports) != (test.gameUDP == ports) {
+						t.Fatalf("%s: unexpected game rules for ports %s", p.name, ports)
+					}
+				}
+				if !slices.Contains(args, "--hostlist-domains="+youtubeHosts) ||
+					!slices.Contains(args, "--filter-udp="+voicePorts) {
+					t.Fatalf("%s: missing YouTube TLS or Discord voice rule", p.name)
+				}
+			}
+		})
 	}
 }
 

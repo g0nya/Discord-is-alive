@@ -109,10 +109,10 @@ func (t *windowsTray) renderConsole() {
 	text.WriteString("\n  " + t.reporter.statusText() + "\n\n")
 	switch t.consoleScreen {
 	case settingsScreen:
-		fmt.Fprintf(&text, "  Настройки\n\n  1  Автозапуск при входе (%s)\n  2  Game Filter (%s)\n  3  Отчёты в Telegram (%s)\n  4  Отправить статус сейчас\n  0  Назад\n",
-			toggleLabel(t.autostart), toggleLabel(t.app.gameFilter), toggleLabel(t.reporter != nil && t.reporter.enabled))
+		fmt.Fprintf(&text, "  Настройки\n\n  1  Автозапуск при входе (%s)\n  2  Сменить режим Game Filter (%s)\n  3  Отчёты в Telegram (%s)\n  4  Отправить статус сейчас\n  0  Назад\n",
+			toggleLabel(t.autostart), t.app.gameFilter.label(), toggleLabel(t.reporter != nil && t.reporter.enabled))
 	case diagnosticsScreen:
-		text.WriteString(s.diagnostic())
+		text.WriteString(t.diagnosticText())
 		text.WriteString("\n  0  Назад\n")
 	default:
 		text.WriteString("  Главное меню\n\n  1  Запустить обход\n  2  Остановить обход\n  3  Проверить соединение\n  4  Показать диагностику\n  5  Скопировать диагностику\n  6  Настройки\n  8  Свернуть в трей\n  0  Выход\n")

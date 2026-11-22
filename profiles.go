@@ -15,7 +15,7 @@ type profile struct {
 	name       string
 	tls        []string
 	updates    bool
-	gameFilter bool
+	gameFilter gameFilterMode
 }
 
 var overlapTLS = []string{
@@ -40,14 +40,23 @@ var profiles = []profile{
 const discordHosts = "discord.com,discord.gg,discordapp.com,discordapp.net,discord.media,discordcdn.com,discordsays.com,discordactivities.com,discord-activities.com,discord-attachments-uploads-prd.storage.googleapis.com"
 const youtubeHosts = "youtube.com,youtu.be,youtube-nocookie.com,googlevideo.com,ytimg.com,yt3.ggpht.com,youtubei.googleapis.com"
 const gamePorts = "1024-1934,1936-65535"
+
+// UDP ports documented by Ubisoft Support for Siege on PC.
+const siegeUDPPorts = "3074,6015,10000-10099"
 const voicePorts = "19294-19344,50000-50100"
 const mediaTLSPorts = "2053,2083,2087,2096,8443"
 
 func (p profile) args() []string {
 	tcp, udp := "443,"+mediaTLSPorts, "443,"+voicePorts
-	if p.gameFilter {
+	var gameUDP string
+	switch p.gameFilter {
+	case gameFilterAll:
 		tcp = "443," + gamePorts
 		udp = "443," + gamePorts
+		gameUDP = gamePorts
+	case gameFilterSiege:
+		udp += "," + siegeUDPPorts
+		gameUDP = siegeUDPPorts
 	}
 	args := []string{"--wf-tcp=" + tcp, "--wf-udp=" + udp}
 	if p.updates {
@@ -78,12 +87,15 @@ func (p profile) args() []string {
 		"--dpi-desync=fake", "--dpi-desync-repeats=6", "--dpi-desync-cutoff=n7",
 		"--dpi-desync-fake-discord=ACTIVE_DISCORD_UDP.bin",
 		"--dpi-desync-fake-stun=ACTIVE_DISCORD_UDP.bin")
-	if p.gameFilter {
+	if p.gameFilter == gameFilterAll {
 		args = append(args,
 			"--new", "--filter-tcp="+gamePorts, "--dpi-desync=multisplit",
 			"--dpi-desync-any-protocol=1", "--dpi-desync-cutoff=n3",
-			"--dpi-desync-split-seqovl=568", "--dpi-desync-split-seqovl-pattern=tls_clienthello_4pda_to.bin",
-			"--new", "--filter-udp="+gamePorts, "--dpi-desync=fake",
+			"--dpi-desync-split-seqovl=568", "--dpi-desync-split-seqovl-pattern=tls_clienthello_4pda_to.bin")
+	}
+	if gameUDP != "" {
+		args = append(args,
+			"--new", "--filter-udp="+gameUDP, "--dpi-desync=fake",
 			"--dpi-desync-fake-unknown-udp=ACTIVE_GAME_UDP.bin", "--dpi-desync-repeats=6",
 			"--dpi-desync-any-protocol=1", "--dpi-desync-cutoff=n2")
 	}
